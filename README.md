@@ -1,5 +1,7 @@
 ══════════════════════════════════════════════════════════════════
+
          TUTORIAL DE INSTALAÇÃO — BAIXADOR DE SITE OFFLINE
+         
 ══════════════════════════════════════════════════════════════════
 
 REQUISITO INICIAL
@@ -31,7 +33,9 @@ Teste básico:
 
 
 ══════════════════════════════════════════════════════════════════
+
  PASSO 2 — CLOUDFLARE (opcional, só se usar --cloud)
+ 
 ══════════════════════════════════════════════════════════════════
 
 Se o site que você quer baixar usa proteção Cloudflare
@@ -48,7 +52,9 @@ O programa passa pela verificação automaticamente, sem você fazer nada.
 
 
 ══════════════════════════════════════════════════════════════════
+
  PASSO 3 — CAPTCHA MANUAL (opcional, só se usar --captcha)
+ 
 ══════════════════════════════════════════════════════════════════
 
 Se o site exige CAPTCHA (reCAPTCHA, hCaptcha, login, etc.),
@@ -80,7 +86,9 @@ O que vai acontecer:
 
 
 ══════════════════════════════════════════════════════════════════
+
  RESUMO — O QUE INSTALAR PARA CADA SITUAÇÃO
+ 
 ══════════════════════════════════════════════════════════════════
 
  Situação                          O que instalar
@@ -92,7 +100,9 @@ O que vai acontecer:
 
 
 ══════════════════════════════════════════════════════════════════
+
  TODOS OS ARGUMENTOS DISPONÍVEIS
+ 
 ══════════════════════════════════════════════════════════════════
 
  Argumento              Atalho   Descrição
@@ -113,7 +123,9 @@ Exemplos de uso combinado:
 
 
 ══════════════════════════════════════════════════════════════════
+
  DICAS IMPORTANTES
+ 
 ══════════════════════════════════════════════════════════════════
 
 - Se o site bloquear por excesso de requests, aumente o delay:
