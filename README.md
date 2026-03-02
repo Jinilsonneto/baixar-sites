@@ -18,7 +18,9 @@ Se não tiver, instale com:
 
 
 ══════════════════════════════════════════════════════════════════
- PASSO 1 — DEPENDÊNCIAS BÁSICAS (obrigatório para todos os modos)
+
+PASSO 1 — DEPENDÊNCIAS BÁSICAS (obrigatório para todos os modos)
+
 ══════════════════════════════════════════════════════════════════
 
 Instale as bibliotecas principais:
