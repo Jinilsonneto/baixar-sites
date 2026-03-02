@@ -137,6 +137,7 @@ Exemplos de uso combinado:
  
 ══════════════════════════════════════════════════════════════════
 
+- Use cd ~/ para pasta onde está o arquivo py. Nela também será feito o download do site.
 
 - Se o site bloquear por excesso de requests, aumente o delay:
       python3 baixar_site_offline.py https://exemplo.com -d 1.5
