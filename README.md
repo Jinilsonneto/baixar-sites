@@ -40,6 +40,7 @@ Teste básico:
  
 ══════════════════════════════════════════════════════════════════
 
+
 Se o site que você quer baixar usa proteção Cloudflare
 (aquela tela "Checking your browser before accessing..."),
 instale o cloudscraper:
@@ -58,6 +59,7 @@ O programa passa pela verificação automaticamente, sem você fazer nada.
  PASSO 3 — CAPTCHA MANUAL (opcional, só se usar --captcha)
  
 ══════════════════════════════════════════════════════════════════
+
 
 Se o site exige CAPTCHA (reCAPTCHA, hCaptcha, login, etc.),
 você vai resolver na mão dentro de um navegador que o programa abre.
@@ -93,8 +95,11 @@ O que vai acontecer:
  
 ══════════════════════════════════════════════════════════════════
 
+
  Situação                          O que instalar
+ 
  ─────────────────────────────────────────────────────────────
+ 
  Site normal                       Passo 1 apenas
  Site com Cloudflare               Passo 1 + Passo 2
  Site com CAPTCHA                  Passo 1 + Passo 3
@@ -107,7 +112,9 @@ O que vai acontecer:
  
 ══════════════════════════════════════════════════════════════════
 
+
  Argumento              Atalho   Descrição
+ 
  ─────────────────────────────────────────────────────────────
  --workers 5            -w 5     Downloads simultâneos (padrão: 5)
  --profundidade 3       -p 3     Limite de níveis de links (0 = ilimitado)
@@ -129,6 +136,7 @@ Exemplos de uso combinado:
  DICAS IMPORTANTES
  
 ══════════════════════════════════════════════════════════════════
+
 
 - Se o site bloquear por excesso de requests, aumente o delay:
       python3 baixar_site_offline.py https://exemplo.com -d 1.5
