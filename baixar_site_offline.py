@@ -156,11 +156,33 @@ class SessaoCaptcha:
 
         options = uc.ChromeOptions()
         options.add_argument("--no-sandbox")
-        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--start-maximized")
+
+        # Detectar versao do Chrome instalado automaticamente
+        def detectar_versao_chrome():
+            import subprocess
+            for cmd in ["google-chrome --version", "google-chrome-stable --version",
+                        "chromium-browser --version", "chromium --version"]:
+                try:
+                    out = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL)
+                    versao = out.decode().strip().split()[-1]  # ex: "145.0.7632.116"
+                    return int(versao.split(".")[0])           # retorna 145
+                except Exception:
+                    continue
+            return None
+
+        versao = detectar_versao_chrome()
+        if versao:
+            log.info(f"Chrome detectado: versao {versao}")
 
         driver = None
         try:
-            driver = uc.Chrome(options=options, headless=False)
+            driver = uc.Chrome(
+                options=options,
+                headless=False,
+                version_main=versao,  # None = automatico, numero = forcado
+            )
             driver.get(url)
             input("  Pressione ENTER quando estiver pronto para continuar...")
             self.cookies = {c["name"]: c["value"] for c in driver.get_cookies()}
