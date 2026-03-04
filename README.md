@@ -122,7 +122,8 @@ O que vai acontecer:
  --subdominios          -s       Incluir subdomínios automaticamente
  --cloud                         Bypass Cloudflare automático
  --captcha                       Abrir navegador para resolver CAPTCHA
-
+ --leve                          Modo leve para baixar sem travar 
+ 
 Exemplos de uso combinado:
 
     python3 baixar_site_offline.py https://exemplo.com -w 10
