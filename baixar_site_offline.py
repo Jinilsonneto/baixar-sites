@@ -4,7 +4,7 @@
 # Cloudflare:   python3 baixar_site_offline.py https://exemplo.com --cloud
 # CAPTCHA:      python3 baixar_site_offline.py https://exemplo.com --captcha
 
-import os, re, sys, time, hashlib, logging, argparse, threading
+import os, re, sys, time, hashlib, logging, argparse, threading, signal
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, urlunparse
 from collections import deque
@@ -587,6 +587,19 @@ b.addEventListener('input',()=>{{const q=b.value.toLowerCase();
 
     def crawl(self):
         inicio = time.time()
+        self._interrompido = False
+
+        # ── Capturar Ctrl+C para gerar indice antes de sair ───────────────────
+        def _handle_sigint(sig, frame):
+            if self._interrompido:
+                # Segundo Ctrl+C: sair imediatamente
+                print("\n\nForçando saida...")
+                os._exit(1)
+            self._interrompido = True
+            print("\n\n  Ctrl+C detectado — aguarde, gerando indice offline...")
+
+        signal.signal(signal.SIGINT, _handle_sigint)
+
         log.info("Verificando sitemap...")
         self._descobrir_sitemap()
         self._agendar(self.url_inicial, 0, pagina=True)
@@ -599,6 +612,7 @@ b.addEventListener('input',()=>{{const q=b.value.toLowerCase();
             def submeter():
                 n = 0
                 while True:
+                    if self._interrompido: break
                     item = self._proximo()
                     if item is None: break
                     url, prof, pag = item
@@ -618,6 +632,13 @@ b.addEventListener('input',()=>{{const q=b.value.toLowerCase();
                     try: f.result()
                     except Exception as e: log.debug(f"Worker erro: {e}")
 
+                if self._interrompido:
+                    # Cancelar futuros pendentes e sair do loop
+                    for f in futuros:
+                        f.cancel()
+                    futuros.clear()
+                    break
+
                 novos = submeter()
                 with self._lock:
                     b, pend, ativos = self._baixados, len(self._fila), len(futuros)
@@ -625,8 +646,15 @@ b.addEventListener('input',()=>{{const q=b.value.toLowerCase();
                 if not done and not novos and not futuros: break
 
         print()
+
+        # Sempre gera o indice, seja download completo ou interrompido
+        if self._interrompido:
+            log.info(f"Download interrompido. Paginas salvas ate agora: {len(self._paginas)}")
         self._gerar_indice()
         self._relatorio(time.time() - inicio)
+
+        # Restaurar handler padrao do Ctrl+C
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     def _relatorio(self, dur):
         log.info("=" * 65)
@@ -662,6 +690,8 @@ def main():
     parser.add_argument("--subdominios",  "-s", action="store_true")
     parser.add_argument("--cloud",   action="store_true", help="Bypass Cloudflare automatico")
     parser.add_argument("--captcha", action="store_true", help="Abrir navegador para resolver CAPTCHA manualmente")
+    parser.add_argument("--leve",    action="store_true",
+                        help="Modo leve: menos CPU/RAM, ideal para rodar em segundo plano sem travar o PC")
     args = parser.parse_args()
 
     url = args.url
@@ -678,14 +708,38 @@ def main():
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
 
+    # ── Modo leve: ajusta workers/delay e reduz prioridade do processo ────────
+    workers = args.workers
+    delay   = args.delay
+
+    if args.leve:
+        workers = min(args.workers, 2)   # no maximo 2 downloads simultaneos
+        delay   = max(args.delay, 1.5)   # minimo 1.5s entre requests
+        # Reduz prioridade do processo no Linux (nice +15 = baixa prioridade)
+        try:
+            os.nice(15)
+        except Exception:
+            pass
+        print()
+        print("=" * 65)
+        print("  MODO LEVE ATIVADO")
+        print("=" * 65)
+        print(f"  Workers : {workers} (limitado para nao sobrecarregar)")
+        print(f"  Delay   : {delay}s entre requests")
+        print(f"  CPU     : prioridade reduzida (nice +15)")
+        print()
+        print("  O download vai mais devagar, mas o PC nao vai travar.")
+        print()
+        print("  Para rodar em segundo plano e fechar o terminal:")
+        print(f"  nohup python3 baixar_site_offline.py {url} --leve > log.txt 2>&1 &")
+        print("=" * 65)
+        print()
+
     print()
-    try:
-        b = BaixadorOffline(url, workers=args.workers, prof_max=args.profundidade,
-                            delay=args.delay, subdominios=args.subdominios,
-                            modo_cloud=args.cloud, modo_captcha=args.captcha)
-        b.crawl()
-    except KeyboardInterrupt:
-        print("\n\nInterrompido. O conteudo baixado ate agora esta salvo.")
+    b = BaixadorOffline(url, workers=workers, prof_max=args.profundidade,
+                        delay=delay, subdominios=args.subdominios,
+                        modo_cloud=args.cloud, modo_captcha=args.captcha)
+    b.crawl()
 
 if __name__ == "__main__":
     main()
