@@ -86,7 +86,7 @@ O que vai acontecer:
     2. Resolva o CAPTCHA ou faça login normalmente
     3. Quando a página carregar, volte ao terminal
     4. Pressione ENTER
-    5. O programa continua o download com sua sessão
+    5. O programa continua o download com o seu captcha manual
 
 
 ══════════════════════════════════════════════════════════════════
