@@ -123,6 +123,7 @@ O que vai acontecer:
  --cloud                         Bypass Cloudflare automático
  --captcha                       Abrir navegador para resolver CAPTCHA
  --leve                          Modo leve para baixar sem travar 
+ --atualizar                     Modo que atualiza os codigos do site
  
 Exemplos de uso combinado:
 
