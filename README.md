@@ -1,7 +1,7 @@
 ══════════════════════════════════════════════════════════════════
 
          TUTORIAL DE INSTALAÇÃO — BAIXADOR DE SITE OFFLINE
-         
+
 ══════════════════════════════════════════════════════════════════
 
 REQUISITO INICIAL
@@ -19,7 +19,7 @@ Se não tiver, instale com:
 
 ══════════════════════════════════════════════════════════════════
 
-PASSO 1 — DEPENDÊNCIAS BÁSICAS (obrigatório para todos os modos)
+ PASSO 1 — DEPENDÊNCIAS BÁSICAS (obrigatório para todos os modos)
 
 ══════════════════════════════════════════════════════════════════
 
@@ -37,9 +37,8 @@ Teste básico:
 ══════════════════════════════════════════════════════════════════
 
  PASSO 2 — CLOUDFLARE (opcional, só se usar --cloud)
- 
-══════════════════════════════════════════════════════════════════
 
+══════════════════════════════════════════════════════════════════
 
 Se o site que você quer baixar usa proteção Cloudflare
 (aquela tela "Checking your browser before accessing..."),
@@ -57,9 +56,8 @@ O programa passa pela verificação automaticamente, sem você fazer nada.
 ══════════════════════════════════════════════════════════════════
 
  PASSO 3 — CAPTCHA MANUAL (opcional, só se usar --captcha)
- 
-══════════════════════════════════════════════════════════════════
 
+══════════════════════════════════════════════════════════════════
 
 Se o site exige CAPTCHA (reCAPTCHA, hCaptcha, login, etc.),
 você vai resolver na mão dentro de um navegador que o programa abre.
@@ -92,14 +90,13 @@ O que vai acontecer:
 ══════════════════════════════════════════════════════════════════
 
  RESUMO — O QUE INSTALAR PARA CADA SITUAÇÃO
- 
+
 ══════════════════════════════════════════════════════════════════
 
-
  Situação                          O que instalar
- 
+
  ─────────────────────────────────────────────────────────────
- 
+
  Site normal                       Passo 1 apenas
  Site com Cloudflare               Passo 1 + Passo 2
  Site com CAPTCHA                  Passo 1 + Passo 3
@@ -109,12 +106,11 @@ O que vai acontecer:
 ══════════════════════════════════════════════════════════════════
 
  TODOS OS ARGUMENTOS DISPONÍVEIS
- 
+
 ══════════════════════════════════════════════════════════════════
 
-
  Argumento              Atalho   Descrição
- 
+
  ─────────────────────────────────────────────────────────────
  --workers 5            -w 5     Downloads simultâneos (padrão: 5)
  --profundidade 3       -p 3     Limite de níveis de links (0 = ilimitado)
@@ -122,33 +118,103 @@ O que vai acontecer:
  --subdominios          -s       Incluir subdomínios automaticamente
  --cloud                         Bypass Cloudflare automático
  --captcha                       Abrir navegador para resolver CAPTCHA
- --leve                          Modo leve para baixar sem travar 
- --atualizar                     Modo que atualiza os codigos do site
- 
+ --atualizar            -a       Atualizar site já baixado (veja seção abaixo)
+
 Exemplos de uso combinado:
 
     python3 baixar_site_offline.py https://exemplo.com -w 10
     python3 baixar_site_offline.py https://exemplo.com --cloud -w 8
     python3 baixar_site_offline.py https://exemplo.com --captcha -p 3
     python3 baixar_site_offline.py https://exemplo.com --cloud --captcha -w 5 -s
+    python3 baixar_site_offline.py https://exemplo.com --atualizar
+
+
+══════════════════════════════════════════════════════════════════
+
+ MODO --atualizar — COMO FUNCIONA
+
+══════════════════════════════════════════════════════════════════
+
+O --atualizar serve para baixar novamente apenas o que mudou no site,
+sem precisar baixar tudo do zero.
+
+Como ele faz isso:
+
+  No primeiro download normal, o programa salva automaticamente um
+  arquivo chamado _meta.json dentro da pasta do site. Esse arquivo
+  guarda um "carimbo" (ETag ou data de modificação) de cada arquivo
+  baixado, que é fornecido pelo próprio servidor.
+
+  Na próxima vez que você usar --atualizar, o programa pergunta ao
+  servidor para cada arquivo: "isso aqui mudou desde o carimbo X?"
+
+  - Se o servidor responder NÃO (código 304): o arquivo é pulado
+    completamente, sem baixar nada.
+  - Se o servidor responder SIM (código 200): o arquivo novo é
+    baixado e substitui o antigo.
+
+O progresso durante o --atualizar mostra:
+
+    Atualizados: 12  |  Sem mudanca: 847  |  Fila: 200  |  Ativos: 5
+
+Observação: sites que não enviam ETag nem Last-Modified (servidores
+mal configurados) terão todos os arquivos baixados normalmente,
+sem ganho de velocidade. Isso é raro mas pode acontecer.
+
+Pausar e retomar o --atualizar:
+
+  Você pode pausar com Ctrl+Z e retomar com fg a qualquer momento,
+  inclusive trocando de rede Wi-Fi entre pausar e retomar.
+  Cada arquivo é independente — nada se perde.
+
+
+══════════════════════════════════════════════════════════════════
+
+ ARQUIVOS GERADOS PELO PROGRAMA
+
+══════════════════════════════════════════════════════════════════
+
+ Dentro da pasta do site baixado você vai encontrar:
+
+ index.html            Página inicial do site para abrir offline
+ _indice_offline.html  Índice com todas as páginas, busca e filtros
+ _meta.json            Carimbos de versão usados pelo --atualizar
+                       (não apague se quiser usar o --atualizar depois)
+
+ assets/
+   imagens/            Fotos, ícones, banners
+   css/                Folhas de estilo
+   js/                 Scripts JavaScript
+   fontes/             Arquivos de fonte (woff, ttf, etc.)
+   videos/             Vídeos do site
+   audio/              Áudios do site
+   docs/               PDFs e documentos
+   dados/              JSON, XML, YAML
+   outros/             Demais arquivos
 
 
 ══════════════════════════════════════════════════════════════════
 
  DICAS IMPORTANTES
- 
+
 ══════════════════════════════════════════════════════════════════
 
-- Use cd ~/ para pasta onde está o arquivo py. Nela também será feito o download do site.
+- Use cd ~/ para ir à pasta onde está o arquivo .py.
+  O download do site será feito nessa mesma pasta.
 
 - Se o site bloquear por excesso de requests, aumente o delay:
       python3 baixar_site_offline.py https://exemplo.com -d 1.5
 
-- Se pausar com Ctrl+C, pode rodar de novo com a mesma URL.
+- Se pausar com Ctrl+Z, retome com fg no mesmo terminal.
+  Nunca use Ctrl+C para pausar — use apenas para cancelar de vez.
   Arquivos já baixados são pulados automaticamente.
 
 - Para baixar 4 sites ao mesmo tempo, abra 4 terminais separados
   e rode um comando em cada.
+
+- Formulários do site (comentários, login, busca) são desativados
+  automaticamente no modo offline para não gerar downloads
+  indesejados ao clicar.
 
 - Após o download, abra no navegador:
       Página inicial:  pasta_do_site/index.html
