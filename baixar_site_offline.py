@@ -4,6 +4,8 @@
 # Atualizar:    python3 baixar_site_offline.py https://exemplo.com --atualizar
 # Cloudflare:   python3 baixar_site_offline.py https://exemplo.com --cloud
 # CAPTCHA:      python3 baixar_site_offline.py https://exemplo.com --captcha
+# Anti-bot:     python3 baixar_site_offline.py https://exemplo.com --furtivo
+# Debug:        python3 baixar_site_offline.py https://exemplo.com --verbose
 
 import os, re, sys, time, hashlib, logging, argparse, threading, json
 from pathlib import Path
@@ -47,14 +49,149 @@ def importar_selenium():
         import undetected_chromedriver as uc
         return uc
 
+import random
+
 requests_lib, BeautifulSoup = importar_requests()
 
 TIMEOUT        = 30
 MAX_RETRIES    = 3
 DELAY          = 0.3
 WORKERS_PADRAO = 5
-USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-              "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+# ── Pool de perfis de navegador reais ─────────────────────────────────────────
+# Cada perfil tem: User-Agent + Sec-CH-UA + plataforma + versao do Chrome/Firefox
+# Misturar Chrome, Edge e Firefox dificulta fingerprinting por UA.
+PERFIS_NAVEGADOR = [
+    # Chrome 124 / Windows
+    {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Sec-CH-UA": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "Sec-CH-UA-Mobile": "?0",
+        "Sec-CH-UA-Platform": '"Windows"',
+    },
+    # Chrome 123 / Windows
+    {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "Sec-CH-UA": '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
+        "Sec-CH-UA-Mobile": "?0",
+        "Sec-CH-UA-Platform": '"Windows"',
+    },
+    # Chrome 124 / macOS
+    {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Sec-CH-UA": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "Sec-CH-UA-Mobile": "?0",
+        "Sec-CH-UA-Platform": '"macOS"',
+    },
+    # Chrome 122 / Linux
+    {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Sec-CH-UA": '"Chromium";v="122", "Google Chrome";v="122", "Not-A.Brand";v="24"',
+        "Sec-CH-UA-Mobile": "?0",
+        "Sec-CH-UA-Platform": '"Linux"',
+    },
+    # Edge 124 / Windows
+    {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+        "Sec-CH-UA": '"Chromium";v="124", "Microsoft Edge";v="124", "Not-A.Brand";v="99"',
+        "Sec-CH-UA-Mobile": "?0",
+        "Sec-CH-UA-Platform": '"Windows"',
+    },
+    # Firefox 125 / Windows
+    {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+        "Sec-CH-UA": None,  # Firefox nao envia Sec-CH-UA
+        "Sec-CH-UA-Mobile": None,
+        "Sec-CH-UA-Platform": None,
+    },
+    # Firefox 124 / Linux
+    {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "Sec-CH-UA": None,
+        "Sec-CH-UA-Mobile": None,
+        "Sec-CH-UA-Platform": None,
+    },
+    # Safari 17 / macOS
+    {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+        "Sec-CH-UA": None,
+        "Sec-CH-UA-Mobile": None,
+        "Sec-CH-UA-Platform": None,
+    },
+]
+
+def sortear_perfil():
+    """Retorna um perfil de navegador aleatorio do pool."""
+    return random.choice(PERFIS_NAVEGADOR)
+
+def headers_navegador(perfil, url_pagina_atual=None, eh_asset=False):
+    """
+    Monta o conjunto completo de headers HTTP que um navegador real envia.
+    - perfil: dicionario do PERFIS_NAVEGADOR
+    - url_pagina_atual: URL da pagina que gerou este pedido (para Referer e Sec-Fetch-Site)
+    - eh_asset: True se for CSS/JS/imagem (muda Sec-Fetch-Dest e Sec-Fetch-Mode)
+    """
+    eh_firefox = "Firefox" in perfil["User-Agent"]
+    eh_safari  = "Safari" in perfil["User-Agent"] and "Chrome" not in perfil["User-Agent"]
+
+    hdrs = {
+        "User-Agent": perfil["User-Agent"],
+        "Accept-Language": random.choice([
+            "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+            "pt-BR,pt;q=0.9,en;q=0.8",
+            "en-US,en;q=0.9,pt-BR;q=0.8,pt;q=0.7",
+            "en-GB,en;q=0.9,pt;q=0.8",
+        ]),
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "DNT": random.choice(["1", None]),   # alguns usuarios ativam, outros nao
+    }
+
+    # Accept varia conforme tipo do recurso
+    if eh_asset:
+        hdrs["Accept"] = "*/*"
+        hdrs["Sec-Fetch-Dest"] = "script" if not eh_asset == "css" else "style"
+        hdrs["Sec-Fetch-Mode"] = "no-cors"
+        hdrs["Sec-Fetch-Site"] = "same-origin"
+    else:
+        hdrs["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+        hdrs["Sec-Fetch-Dest"] = "document"
+        hdrs["Sec-Fetch-Mode"] = "navigate"
+        hdrs["Sec-Fetch-Site"] = "same-origin" if url_pagina_atual else "none"
+        hdrs["Sec-Fetch-User"] = "?1"
+        hdrs["Upgrade-Insecure-Requests"] = "1"
+
+    # Referer: simula navegacao natural dentro do site
+    if url_pagina_atual:
+        hdrs["Referer"] = url_pagina_atual
+
+    # Headers exclusivos do Chromium (Chrome/Edge) — Firefox e Safari nao enviam
+    if not eh_firefox and not eh_safari:
+        if perfil.get("Sec-CH-UA"):
+            hdrs["Sec-CH-UA"]          = perfil["Sec-CH-UA"]
+            hdrs["Sec-CH-UA-Mobile"]   = perfil["Sec-CH-UA-Mobile"]
+            hdrs["Sec-CH-UA-Platform"] = perfil["Sec-CH-UA-Platform"]
+
+    # Remove entradas None (headers opcionais que nao foram sorteados)
+    return {k: v for k, v in hdrs.items() if v is not None}
+
+def delay_humano(base=DELAY, modo_furtivo=False):
+    """
+    Gera um delay com variacao aleatoria que imita comportamento humano.
+    - modo_furtivo: delays maiores, pausa longa ocasional (simula leitura)
+    """
+    if modo_furtivo:
+        d = base + random.uniform(1.5, 4.5)
+        # ~10% de chance de uma pausa mais longa (usuario "lendo" a pagina)
+        if random.random() < 0.10:
+            d += random.uniform(3.0, 8.0)
+    else:
+        # Variacao de ±60% no delay normal
+        d = base * random.uniform(0.4, 1.6)
+        # ~5% de chance de pausa curta extra
+        if random.random() < 0.05:
+            d += random.uniform(0.5, 2.0)
+    time.sleep(max(d, 0.1))
 
 EXTENSOES = {
     "imagens": {".jpg",".jpeg",".png",".gif",".webp",".svg",".ico",".bmp",".tiff",".avif"},
@@ -117,6 +254,12 @@ def mesmo_dominio(url, dominio, subdominios=False):
     if not h: return True
     if h == dominio: return True
     if subdominios and h.endswith("." + dominio): return True
+    # Normaliza prefixo "www": trata example.com e www.example.com como o mesmo dominio.
+    # Isso corrige o caso em que o usuario digita https://example.com e o servidor
+    # redireciona para https://www.example.com (redirect muito comum).
+    h_bare = h[4:] if h.startswith("www.") else h
+    d_bare = dominio[4:] if dominio.startswith("www.") else dominio
+    if h_bare and h_bare == d_bare: return True
     return False
 
 def rel_path(origem_url, destino_abs, pasta, origem_pagina=True):
@@ -139,7 +282,7 @@ def tam_legivel(b):
 class SessaoCaptcha:
     def __init__(self, url_inicial):
         self.cookies = {}
-        self.user_agent = USER_AGENT
+        self.user_agent = sortear_perfil()["User-Agent"]
         self._resolver(url_inicial)
 
     def _resolver(self, url):
@@ -208,9 +351,12 @@ class SessaoCaptcha:
 class BaixadorOffline:
 
     def __init__(self, url_inicial, workers=WORKERS_PADRAO, prof_max=0, delay=DELAY,
-                 subdominios=False, modo_cloud=False, modo_captcha=False, modo_atualizar=False):
+                 subdominios=False, modo_cloud=False, modo_captcha=False, modo_atualizar=False,
+                 modo_js=False, modo_furtivo=False):
 
-        self.url_inicial   = url_inicial.rstrip("/")
+        # Remove fragmento (#ancora) da URL inicial — servidor nunca o recebe
+        _p0 = urlparse(url_inicial.rstrip("/"))
+        self.url_inicial   = urlunparse(_p0._replace(fragment=""))
         p = urlparse(self.url_inicial)
         self.dominio       = p.netloc
         self.esquema       = p.scheme
@@ -220,7 +366,14 @@ class BaixadorOffline:
         self.subdominios   = subdominios
         self.modo_cloud    = modo_cloud
         self.modo_captcha  = modo_captcha
-        self.modo_atualizar = modo_atualizar   # NOVO: força reescrita de arquivos existentes
+        self.modo_atualizar = modo_atualizar
+        self.modo_js       = modo_js
+        self.modo_furtivo  = modo_furtivo
+
+        # Perfil de navegador fixo para esta sessao (mas trocado a cada retry)
+        self._perfil_atual = sortear_perfil()
+        # Rastreia a ultima URL visitada por thread para construir o Referer
+        self._ultimo_referer: dict = {}  # thread_id -> url
 
         self.pasta = Path(sanitizar(self.dominio))
         self.pasta.mkdir(parents=True, exist_ok=True)
@@ -239,12 +392,20 @@ class BaixadorOffline:
             self.session = requests_lib.Session()
 
         self.session.headers.update({
-            "User-Agent": USER_AGENT,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
-            "Accept-Encoding": "gzip, deflate",
-            "Connection": "keep-alive",
+            "User-Agent":        self._perfil_atual["User-Agent"],
+            "Accept":            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language":   "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept-Encoding":   "gzip, deflate, br",
+            "Connection":        "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
         })
+        # Adiciona Client Hints do Chromium (quando o perfil suporta)
+        if self._perfil_atual.get("Sec-CH-UA"):
+            self.session.headers.update({
+                "Sec-CH-UA":          self._perfil_atual["Sec-CH-UA"],
+                "Sec-CH-UA-Mobile":   self._perfil_atual["Sec-CH-UA-Mobile"],
+                "Sec-CH-UA-Platform": self._perfil_atual["Sec-CH-UA-Platform"],
+            })
 
         tamanho_pool = max(self.workers + 5, 20)
         adapter = requests_lib.adapters.HTTPAdapter(
@@ -269,6 +430,12 @@ class BaixadorOffline:
         self._erros     = 0
         self._bytes     = 0
 
+        # Driver JS (Chrome headless) — um unico driver com lock para modo --js
+        self._js_driver  = None
+        self._js_lock    = threading.Lock()
+        if modo_js:
+            self._iniciar_driver_js()
+
         # Metadados HTTP (ETag / Last-Modified) persistidos entre sessoes
         self._arquivo_meta = self.pasta / "_meta.json"
         self._meta = self._carregar_meta()
@@ -277,12 +444,77 @@ class BaixadorOffline:
         if modo_cloud:     modos.append("Cloudflare bypass")
         if modo_captcha:   modos.append("CAPTCHA manual")
         if modo_atualizar: modos.append("ATUALIZAR (inteligente por ETag/Last-Modified)")
+        if modo_js:        modos.append("JS rendering (Chrome headless)")
+        if modo_furtivo:   modos.append("FURTIVO (anti-deteccao intensificado)")
         if not modos:      modos.append("padrao")
 
         log.info(f"Site:    {self.url_inicial}")
         log.info(f"Pasta:   {self.pasta.resolve()}")
         log.info(f"Modo:    {' + '.join(modos)}")
         log.info(f"Workers: {self.workers}  |  Profundidade: {'ilimitada' if not self.prof_max else self.prof_max}")
+
+    # ── Driver JS (Chrome headless) ────────────────────────────────────────────
+
+    def _iniciar_driver_js(self):
+        uc = importar_selenium()
+        log.info("Iniciando Chrome headless para renderizacao JS...")
+        options = uc.ChromeOptions()
+        options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--window-size=1280,900")
+        options.add_argument(f"--user-agent={self._perfil_atual['User-Agent']}")
+
+        def detectar_versao_chrome():
+            import subprocess
+            for cmd in ["google-chrome --version", "google-chrome-stable --version",
+                        "chromium-browser --version", "chromium --version"]:
+                try:
+                    out = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL)
+                    versao = out.decode().strip().split()[-1]
+                    return int(versao.split(".")[0])
+                except Exception:
+                    continue
+            return None
+
+        versao = detectar_versao_chrome()
+        try:
+            self._js_driver = uc.Chrome(options=options, headless=True, version_main=versao)
+            log.info("Chrome headless pronto.")
+        except Exception as e:
+            log.warning(f"Nao foi possivel iniciar Chrome headless: {e}")
+            log.warning("O modo --js sera ignorado. Instale o Google Chrome.")
+            self._js_driver = None
+
+    def _encerrar_driver_js(self):
+        if self._js_driver:
+            try: self._js_driver.quit()
+            except Exception: pass
+            self._js_driver = None
+
+    def _get_html_js(self, url):
+        """Renderiza a pagina com Chrome headless e retorna o HTML completo apos JS."""
+        if not self._js_driver:
+            return None
+        with self._js_lock:
+            try:
+                self._js_driver.get(url)
+                # Aguarda o corpo da pagina ter conteudo real (max 15s)
+                from selenium.webdriver.support.ui import WebDriverWait
+                from selenium.webdriver.support import expected_conditions as EC
+                from selenium.webdriver.common.by import By
+                try:
+                    WebDriverWait(self._js_driver, 15).until(
+                        EC.presence_of_element_located((By.TAG_NAME, "body"))
+                    )
+                except Exception:
+                    pass
+                time.sleep(1.5)  # Aguarda scripts adicionais terminarem
+                return self._js_driver.page_source.encode("utf-8")
+            except Exception as e:
+                log.debug(f"Erro JS rendering {url}: {e}")
+                return None
 
     # ── Metadados ──────────────────────────────────────────────────────────────
 
@@ -312,24 +544,62 @@ class BaixadorOffline:
 
     # ── HTTP ───────────────────────────────────────────────────────────────────
 
-    def _get(self, url, stream=False):
+    def _hdrs_request(self, url, referer=None, eh_asset=False):
+        """Monta headers completos para uma requisicao, usando o perfil atual."""
+        with self._lock:
+            perfil = self._perfil_atual
+        return headers_navegador(perfil, url_pagina_atual=referer, eh_asset=eh_asset)
+
+    def _trocar_perfil(self):
+        """Sorteia um novo perfil de navegador (chamado apos deteccao de bloqueio)."""
+        with self._lock:
+            self._perfil_atual = sortear_perfil()
+        log.info(f"Perfil de navegador trocado: {self._perfil_atual['User-Agent'][:60]}...")
+
+    def _get(self, url, stream=False, referer=None, eh_asset=False):
         for t in range(1, MAX_RETRIES + 1):
             try:
-                r = self.session.get(url, timeout=TIMEOUT, stream=stream, allow_redirects=True)
+                hdrs = self._hdrs_request(url, referer=referer, eh_asset=eh_asset)
+                r = self.session.get(url, timeout=TIMEOUT, stream=stream,
+                                     allow_redirects=True, headers=hdrs)
+
+                # 429 Too Many Requests: espera o Retry-After ou faz backoff exponencial
+                if r.status_code == 429:
+                    retry_after = int(r.headers.get("Retry-After", 0))
+                    espera = retry_after if retry_after > 0 else (2 ** t) * 3 + random.uniform(1, 4)
+                    log.warning(f"429 (limite de requisicoes) em {url}. Aguardando {espera:.1f}s...")
+                    time.sleep(espera)
+                    self._trocar_perfil()
+                    continue
+
                 r.raise_for_status()
                 if self._detectar_captcha(r):
                     log.warning(f"CAPTCHA/bloqueio detectado em: {url}")
                     log.warning("Use --captcha para resolver manualmente ou --cloud para Cloudflare.")
+                    self._trocar_perfil()
                     return None
                 return r
             except Exception as e:
                 if t == MAX_RETRIES:
-                    log.debug(f"Falha: {url} -> {e}")
+                    log.warning(f"Falha ao baixar: {url} -> {e}")
                     return None
-                time.sleep(t * 1.5)
+                backoff = (t * 1.5) + random.uniform(0, 1.0)
+                time.sleep(backoff)
         return None
 
-    def _get_condicional(self, url, stream=False):
+    def _get_opcional(self, url):
+        """Versao sem retry para recursos opcionais (robots.txt, sitemap.xml)."""
+        try:
+            hdrs = self._hdrs_request(url)
+            r = self.session.get(url, timeout=10, allow_redirects=True, headers=hdrs)
+            r.raise_for_status()
+            if self._detectar_captcha(r):
+                return None
+            return r
+        except Exception:
+            return None
+
+    def _get_condicional(self, url, stream=False, referer=None):
         """
         No modo --atualizar: envia ETag/Last-Modified se existirem.
         Retorna (resposta, mudou):
@@ -341,18 +611,27 @@ class BaixadorOffline:
         with self._lock:
             meta = self._meta.get(url, {})
 
-        hdrs = {}
+        hdrs_cond = {}
         if meta.get("etag"):
-            hdrs["If-None-Match"] = meta["etag"]
+            hdrs_cond["If-None-Match"] = meta["etag"]
         if meta.get("last_modified"):
-            hdrs["If-Modified-Since"] = meta["last_modified"]
+            hdrs_cond["If-Modified-Since"] = meta["last_modified"]
 
         for t in range(1, MAX_RETRIES + 1):
             try:
+                hdrs = self._hdrs_request(url, referer=referer)
+                hdrs.update(hdrs_cond)
                 r = self.session.get(url, timeout=TIMEOUT, stream=stream,
                                      allow_redirects=True, headers=hdrs)
                 if r.status_code == 304:
-                    return None, False   # nao mudou
+                    return None, False
+                if r.status_code == 429:
+                    retry_after = int(r.headers.get("Retry-After", 0))
+                    espera = retry_after if retry_after > 0 else (2 ** t) * 3 + random.uniform(1, 4)
+                    log.warning(f"429 em {url}. Aguardando {espera:.1f}s...")
+                    time.sleep(espera)
+                    self._trocar_perfil()
+                    continue
                 r.raise_for_status()
                 if self._detectar_captcha(r):
                     log.warning(f"CAPTCHA/bloqueio detectado em: {url}")
@@ -362,7 +641,7 @@ class BaixadorOffline:
                 if t == MAX_RETRIES:
                     log.debug(f"Falha: {url} -> {e}")
                     return None, True
-                time.sleep(t * 1.5)
+                time.sleep((t * 1.5) + random.uniform(0, 1.0))
         return None, True
 
     def _detectar_captcha(self, r):
@@ -448,10 +727,11 @@ class BaixadorOffline:
         caminho.parent.mkdir(parents=True, exist_ok=True)
         ext = caminho.suffix.lower()
         eh_midia = ext in {".mp4",".webm",".avi",".mov",".mkv",".mp3",".flac",".wav",".ogg"}
+        eh_css   = ext == ".css"
 
-        # Modo atualizar: usa requisição condicional se já existe
+        # url_base serve como Referer (asset foi requisitado pela pagina pai)
         if self.modo_atualizar and ja_existe:
-            r, mudou = self._get_condicional(url, stream=eh_midia)
+            r, mudou = self._get_condicional(url, stream=eh_midia, referer=url_base)
             if not mudou:
                 with self._lock: self._pulados += 1
                 return str(caminho)
@@ -459,7 +739,8 @@ class BaixadorOffline:
                 with self._lock: self._erros += 1
                 return None
         else:
-            r = self._get(url, stream=eh_midia)
+            r = self._get(url, stream=eh_midia, referer=url_base,
+                          eh_asset="css" if eh_css else True)
             if not r:
                 with self._lock: self._erros += 1
                 return None
@@ -482,15 +763,23 @@ class BaixadorOffline:
                 if ja_existe and self.modo_atualizar:
                     self._atualizados += 1
         except Exception as e:
-            log.debug(f"Erro salvando {url}: {e}")
+            log.warning(f"Erro salvando {url}: {e}")
             with self._lock: self._erros += 1
             return None
 
-        time.sleep(self.delay)
+        delay_humano(self.delay, self.modo_furtivo)
         return str(caminho)
 
     def _processar_html(self, url, conteudo, prof):
-        soup = BeautifulSoup(conteudo, "lxml")
+        # Tenta lxml primeiro (mais rapido); se falhar usa html.parser (mais compativel)
+        try:
+            soup = BeautifulSoup(conteudo, "lxml")
+        except Exception:
+            try:
+                soup = BeautifulSoup(conteudo, "html.parser")
+            except Exception as e:
+                log.warning(f"Falha ao interpretar HTML de {url}: {e}")
+                raise
         base_tag = soup.find("base", href=True)
         url_base = normalizar(base_tag["href"], url) if base_tag else url
         if url_base is None: url_base = url
@@ -584,11 +873,14 @@ class BaixadorOffline:
 
         log.info(f"[P{prof}] {url}")
 
+        # Referer: paginas de nivel 0 vem "de fora" (sem referer), paginas filhas
+        # usam a URL mae que as agendou — comportamento identico a um navegador real.
+        referer = self.url_inicial if prof > 0 else None
+
         ja_existe_local = url2path(url, self.pasta, pagina=True).exists()
 
-        # Modo atualizar com arquivo existente: verifica se mudou antes de baixar
         if self.modo_atualizar and ja_existe_local:
-            r, mudou = self._get_condicional(url)
+            r, mudou = self._get_condicional(url, referer=referer)
             if not mudou:
                 with self._lock: self._pulados += 1
                 log.debug(f"Sem mudancas: {url}")
@@ -597,7 +889,7 @@ class BaixadorOffline:
                 with self._lock: self._erros += 1
                 return
         else:
-            r = self._get(url)
+            r = self._get(url, referer=referer)
             if not r:
                 with self._lock: self._erros += 1
                 return
@@ -605,13 +897,37 @@ class BaixadorOffline:
         ct = r.headers.get("Content-Type", "").lower()
         url_final = r.url or url
 
+        # Detecta redirect para domínio diferente e avisa o usuario
+        dominio_final = urlparse(url_final).netloc
+        if dominio_final and not mesmo_dominio(url_final, self.dominio, self.subdominios):
+            log.warning(f"Redirect para domínio diferente: {self.dominio} → {dominio_final}")
+            log.warning("O conteudo sera salvo, mas links externos nao serao seguidos.")
+            log.warning("Se o site principal esta em outro dominio, tente baixar diretamente por ele.")
+
         if "text/html" in ct:
             caminho = url2path(url_final, self.pasta, pagina=True)
             if not caminho.suffix: caminho = caminho.with_suffix(".html")
-            conteudo = self._processar_html(url_final, r.content, prof)
+
+            # Modo JS: substitui o conteudo pelo HTML renderizado com JavaScript
+            if self.modo_js and self._js_driver:
+                conteudo_bruto = self._get_html_js(url_final)
+                if conteudo_bruto:
+                    conteudo = self._processar_html(url_final, conteudo_bruto, prof)
+                    titulo_raw = conteudo_bruto
+                else:
+                    # Fallback para resposta normal se JS falhar
+                    conteudo = self._processar_html(url_final, r.content, prof)
+                    titulo_raw = r.content
+            else:
+                conteudo = self._processar_html(url_final, r.content, prof)
+                titulo_raw = r.content
+
             titulo = url_final
             try:
-                s = BeautifulSoup(r.content, "lxml")
+                try:
+                    s = BeautifulSoup(titulo_raw, "lxml")
+                except Exception:
+                    s = BeautifulSoup(titulo_raw, "html.parser")
                 t = s.find("title")
                 if t and t.string: titulo = t.string.strip()
             except Exception: pass
@@ -645,10 +961,10 @@ class BaixadorOffline:
             self._bytes    += len(conteudo)
             if era_existente and self.modo_atualizar:
                 self._atualizados += 1
-        time.sleep(self.delay)
+        delay_humano(self.delay, self.modo_furtivo)
 
     def _ler_sitemap(self, sm_url):
-        r = self._get(sm_url)
+        r = self._get_opcional(sm_url)
         if not r: return
         locs = re.findall(r"<loc>\s*(.+?)\s*</loc>", r.text)
         for loc in locs:
@@ -660,7 +976,7 @@ class BaixadorOffline:
     def _descobrir_sitemap(self):
         candidatos = [f"{self.esquema}://{self.dominio}/sitemap.xml",
                       f"{self.esquema}://{self.dominio}/sitemap_index.xml"]
-        r = self._get(f"{self.esquema}://{self.dominio}/robots.txt")
+        r = self._get_opcional(f"{self.esquema}://{self.dominio}/robots.txt")
         if r:
             for linha in r.text.splitlines():
                 if linha.lower().startswith("sitemap:"):
@@ -1079,9 +1395,20 @@ filtros.forEach(f => {{
         inicio = time.time()
         if self.modo_atualizar:
             log.info("MODO ATUALIZAR INTELIGENTE: verificando o que mudou no servidor...")
+        if self.modo_furtivo:
+            log.info(f"MODO FURTIVO ativo — perfil: {self._perfil_atual['User-Agent'][:72]}...")
         log.info("Verificando sitemap...")
         self._descobrir_sitemap()
         self._agendar(self.url_inicial, 0, pagina=True)
+
+        # No modo furtivo embaralha a fila de URLs antes de começar, para que o
+        # padrão de acesso nao seja sequencial/previsivel (comportamento de crawler).
+        if self.modo_furtivo and len(self._fila) > 1:
+            lista_fila = list(self._fila)
+            random.shuffle(lista_fila)
+            self._fila = deque(lista_fila)
+            log.info(f"Fila embaralhada ({len(self._fila)} URLs) para acesso nao-sequencial.")
+
         log.info(f"Iniciando download com {self.workers} workers...")
         print()
 
@@ -1108,7 +1435,7 @@ filtros.forEach(f => {{
                 for f in done:
                     futuros.discard(f)
                     try: f.result()
-                    except Exception as e: log.debug(f"Worker erro: {e}")
+                    except Exception as e: log.warning(f"Worker erro: {e}")
 
                 novos = submeter()
                 with self._lock:
@@ -1120,6 +1447,7 @@ filtros.forEach(f => {{
                 if not done and not novos and not futuros: break
 
         print()
+        self._encerrar_driver_js()
         self._salvar_meta()
         self._gerar_indice()
         self._relatorio(time.time() - inicio)
@@ -1163,9 +1491,18 @@ def main():
     parser.add_argument("--subdominios",  "-s", action="store_true")
     parser.add_argument("--cloud",        action="store_true", help="Bypass Cloudflare automatico")
     parser.add_argument("--captcha",      action="store_true", help="Abrir navegador para resolver CAPTCHA manualmente")
+    parser.add_argument("--js",           action="store_true",
+                        help="Renderizar paginas com Chrome headless (para sites que usam JavaScript)")
     parser.add_argument("--atualizar",    "-a", action="store_true",
                         help="Atualizar site ja baixado (so baixa o que mudou, via ETag/Last-Modified)")
+    parser.add_argument("--furtivo",      "-f", action="store_true",
+                        help="Modo anti-deteccao intensificado: UA aleatorio, delays humanos, fila embaralhada")
+    parser.add_argument("--verbose",      "-v", action="store_true",
+                        help="Mostrar mensagens de debug detalhadas (util para diagnosticar problemas)")
     args = parser.parse_args()
+
+    if args.verbose:
+        logging.getLogger("offline").setLevel(logging.DEBUG)
 
     url = args.url
     if not url:
@@ -1190,10 +1527,15 @@ def main():
                             subdominios=args.subdominios,
                             modo_cloud=args.cloud,
                             modo_captcha=args.captcha,
-                            modo_atualizar=args.atualizar)
+                            modo_js=args.js,
+                            modo_atualizar=args.atualizar,
+                            modo_furtivo=args.furtivo)
         b.crawl()
     except KeyboardInterrupt:
         print("\n\nInterrompido. O conteudo baixado ate agora esta salvo.")
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
