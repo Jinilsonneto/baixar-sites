@@ -3,9 +3,16 @@
 # Uso basico:   python3 baixar_site_offline.py https://exemplo.com
 # Atualizar:    python3 baixar_site_offline.py https://exemplo.com --atualizar
 # Cloudflare:   python3 baixar_site_offline.py https://exemplo.com --cloud
+# TLS bypass:   python3 baixar_site_offline.py https://exemplo.com --tls
 # CAPTCHA:      python3 baixar_site_offline.py https://exemplo.com --captcha
 # Anti-bot:     python3 baixar_site_offline.py https://exemplo.com --furtivo
 # Debug:        python3 baixar_site_offline.py https://exemplo.com --verbose
+#
+# NOVIDADES:
+#   --tls   Usa curl_cffi para imitar o fingerprint TLS do Chrome real.
+#           Resolve bloqueios que --cloud nao resolve (PerimeterX, DataDome,
+#           Cloudflare avancado). Nao precisa instalar o Chrome.
+#           Instala automaticamente: pip install curl_cffi
 
 import os, re, sys, time, hashlib, logging, argparse, threading, json
 from pathlib import Path
@@ -39,6 +46,16 @@ def importar_cloudscraper():
         import cloudscraper
         return cloudscraper
 
+def importar_curl_cffi():
+    try:
+        from curl_cffi.requests import Session as CurlSession
+        return CurlSession
+    except ImportError:
+        print("Instalando curl_cffi (fingerprint TLS do Chrome real)...")
+        instalar("curl_cffi")
+        from curl_cffi.requests import Session as CurlSession
+        return CurlSession
+
 def importar_selenium():
     try:
         import undetected_chromedriver as uc
@@ -62,58 +79,58 @@ WORKERS_PADRAO = 5
 # Cada perfil tem: User-Agent + Sec-CH-UA + plataforma + versao do Chrome/Firefox
 # Misturar Chrome, Edge e Firefox dificulta fingerprinting por UA.
 PERFIS_NAVEGADOR = [
-    # Chrome 124 / Windows
+    # Chrome 134 / Windows
     {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Sec-CH-UA": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+        "Sec-CH-UA": '"Chromium";v="134", "Google Chrome";v="134", "Not-A.Brand";v="24"',
         "Sec-CH-UA-Mobile": "?0",
         "Sec-CH-UA-Platform": '"Windows"',
     },
-    # Chrome 123 / Windows
+    # Chrome 133 / Windows
     {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-        "Sec-CH-UA": '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+        "Sec-CH-UA": '"Google Chrome";v="133", "Not:A-Brand";v="24", "Chromium";v="133"',
         "Sec-CH-UA-Mobile": "?0",
         "Sec-CH-UA-Platform": '"Windows"',
     },
-    # Chrome 124 / macOS
+    # Chrome 134 / macOS
     {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Sec-CH-UA": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+        "Sec-CH-UA": '"Chromium";v="134", "Google Chrome";v="134", "Not-A.Brand";v="24"',
         "Sec-CH-UA-Mobile": "?0",
         "Sec-CH-UA-Platform": '"macOS"',
     },
-    # Chrome 122 / Linux
+    # Chrome 132 / Linux
     {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Sec-CH-UA": '"Chromium";v="122", "Google Chrome";v="122", "Not-A.Brand";v="24"',
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+        "Sec-CH-UA": '"Chromium";v="132", "Google Chrome";v="132", "Not-A.Brand";v="24"',
         "Sec-CH-UA-Mobile": "?0",
         "Sec-CH-UA-Platform": '"Linux"',
     },
-    # Edge 124 / Windows
+    # Edge 134 / Windows
     {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
-        "Sec-CH-UA": '"Chromium";v="124", "Microsoft Edge";v="124", "Not-A.Brand";v="99"',
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36 Edg/134.0.0.0",
+        "Sec-CH-UA": '"Chromium";v="134", "Microsoft Edge";v="134", "Not-A.Brand";v="24"',
         "Sec-CH-UA-Mobile": "?0",
         "Sec-CH-UA-Platform": '"Windows"',
     },
-    # Firefox 125 / Windows
+    # Firefox 136 / Windows
     {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0",
         "Sec-CH-UA": None,  # Firefox nao envia Sec-CH-UA
         "Sec-CH-UA-Mobile": None,
         "Sec-CH-UA-Platform": None,
     },
-    # Firefox 124 / Linux
+    # Firefox 135 / Linux
     {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:135.0) Gecko/20100101 Firefox/135.0",
         "Sec-CH-UA": None,
         "Sec-CH-UA-Mobile": None,
         "Sec-CH-UA-Platform": None,
     },
-    # Safari 17 / macOS
+    # Safari 18 / macOS
     {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_3_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3.1 Safari/605.1.15",
         "Sec-CH-UA": None,
         "Sec-CH-UA-Mobile": None,
         "Sec-CH-UA-Platform": None,
@@ -352,7 +369,7 @@ class BaixadorOffline:
 
     def __init__(self, url_inicial, workers=WORKERS_PADRAO, prof_max=0, delay=DELAY,
                  subdominios=False, modo_cloud=False, modo_captcha=False, modo_atualizar=False,
-                 modo_js=False, modo_furtivo=False):
+                 modo_js=False, modo_furtivo=False, modo_tls=False):
 
         # Remove fragmento (#ancora) da URL inicial — servidor nunca o recebe
         _p0 = urlparse(url_inicial.rstrip("/"))
@@ -369,6 +386,7 @@ class BaixadorOffline:
         self.modo_atualizar = modo_atualizar
         self.modo_js       = modo_js
         self.modo_furtivo  = modo_furtivo
+        self.modo_tls      = modo_tls
 
         # Perfil de navegador fixo para esta sessao (mas trocado a cada retry)
         self._perfil_atual = sortear_perfil()
@@ -382,7 +400,13 @@ class BaixadorOffline:
                     "assets/dados","assets/outros"):
             (self.pasta / sub).mkdir(parents=True, exist_ok=True)
 
-        if modo_cloud:
+        if modo_tls:
+            log.info("Modo TLS ativo -- usando curl_cffi (fingerprint Chrome real)")
+            CurlSession = importar_curl_cffi()
+            # impersonate="chrome132" faz o curl_cffi usar o mesmo TLS handshake
+            # que o Chrome 132 usaria — invisivel para sistemas anti-bot modernos.
+            self.session = CurlSession(impersonate="chrome132")
+        elif modo_cloud:
             log.info("Modo Cloudflare ativado -- usando cloudscraper")
             cs = importar_cloudscraper()
             self.session = cs.create_scraper(
@@ -441,6 +465,7 @@ class BaixadorOffline:
         self._meta = self._carregar_meta()
 
         modos = []
+        if modo_tls:       modos.append("TLS fingerprint (curl_cffi / Chrome real)")
         if modo_cloud:     modos.append("Cloudflare bypass")
         if modo_captcha:   modos.append("CAPTCHA manual")
         if modo_atualizar: modos.append("ATUALIZAR (inteligente por ETag/Last-Modified)")
@@ -1490,6 +1515,7 @@ def main():
     parser.add_argument("--delay",        "-d", type=float, default=DELAY)
     parser.add_argument("--subdominios",  "-s", action="store_true")
     parser.add_argument("--cloud",        action="store_true", help="Bypass Cloudflare automatico")
+    parser.add_argument("--tls",          action="store_true", help="Imitar fingerprint TLS do Chrome real via curl_cffi (resolve bloqueios avancados sem instalar Chrome)")
     parser.add_argument("--captcha",      action="store_true", help="Abrir navegador para resolver CAPTCHA manualmente")
     parser.add_argument("--js",           action="store_true",
                         help="Renderizar paginas com Chrome headless (para sites que usam JavaScript)")
@@ -1529,13 +1555,11 @@ def main():
                             modo_captcha=args.captcha,
                             modo_js=args.js,
                             modo_atualizar=args.atualizar,
-                            modo_furtivo=args.furtivo)
+                            modo_furtivo=args.furtivo,
+                            modo_tls=args.tls)
         b.crawl()
     except KeyboardInterrupt:
         print("\n\nInterrompido. O conteudo baixado ate agora esta salvo.")
-
-if __name__ == "__main__":
-    main()
 
 if __name__ == "__main__":
     main()
