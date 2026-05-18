@@ -167,7 +167,11 @@ def headers_navegador(perfil, url_pagina_atual=None, eh_asset=False):
     # Accept varia conforme tipo do recurso
     if eh_asset:
         hdrs["Accept"] = "*/*"
-        hdrs["Sec-Fetch-Dest"] = "script" if not eh_asset == "css" else "style"
+        # Se eh_asset for uma string (ex: "css"), usa isso; caso contrario (True), usa "script" como padrao
+        if isinstance(eh_asset, str) and eh_asset == "css":
+            hdrs["Sec-Fetch-Dest"] = "style"
+        else:
+            hdrs["Sec-Fetch-Dest"] = "script"
         hdrs["Sec-Fetch-Mode"] = "no-cors"
         hdrs["Sec-Fetch-Site"] = "same-origin"
     else:
@@ -403,41 +407,64 @@ class BaixadorOffline:
         if modo_tls:
             log.info("Modo TLS ativo -- usando curl_cffi (fingerprint Chrome real)")
             CurlSession = importar_curl_cffi()
-            # impersonate="chrome132" faz o curl_cffi usar o mesmo TLS handshake
-            # que o Chrome 132 usaria — invisivel para sistemas anti-bot modernos.
-            self.session = CurlSession(impersonate="chrome132")
+            # Usa chrome131 que e uma versao estavel e amplamente suportada
+            # O curl_cffi tem varias versoes: chrome99, chrome101, chrome104, chrome107,
+            # chrome110, chrome116, chrome119, chrome120, chrome123, chrome124, chrome131, etc.
+            self.session = CurlSession(impersonate="chrome131")
+            # curl_cffi nao suporta HTTPAdapter.mount(), entao pulamos essa parte
+            self._usando_curl_cffi = True
         elif modo_cloud:
             log.info("Modo Cloudflare ativado -- usando cloudscraper")
             cs = importar_cloudscraper()
             self.session = cs.create_scraper(
                 browser={"browser": "chrome", "platform": "windows", "mobile": False}
             )
+            self._usando_curl_cffi = False
         else:
             self.session = requests_lib.Session()
+            self._usando_curl_cffi = False
 
-        self.session.headers.update({
-            "User-Agent":        self._perfil_atual["User-Agent"],
-            "Accept":            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Language":   "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Accept-Encoding":   "gzip, deflate, br",
-            "Connection":        "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-        })
-        # Adiciona Client Hints do Chromium (quando o perfil suporta)
-        if self._perfil_atual.get("Sec-CH-UA"):
+        # Configurar headers padrao - curl_cffi usa headers diretos na sessao
+        if not self._usando_curl_cffi:
             self.session.headers.update({
-                "Sec-CH-UA":          self._perfil_atual["Sec-CH-UA"],
-                "Sec-CH-UA-Mobile":   self._perfil_atual["Sec-CH-UA-Mobile"],
-                "Sec-CH-UA-Platform": self._perfil_atual["Sec-CH-UA-Platform"],
+                "User-Agent":        self._perfil_atual["User-Agent"],
+                "Accept":            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Language":   "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Accept-Encoding":   "gzip, deflate, br",
+                "Connection":        "keep-alive",
+                "Upgrade-Insecure-Requests": "1",
             })
+            # Adiciona Client Hints do Chromium (quando o perfil suporta)
+            if self._perfil_atual.get("Sec-CH-UA"):
+                self.session.headers.update({
+                    "Sec-CH-UA":          self._perfil_atual["Sec-CH-UA"],
+                    "Sec-CH-UA-Mobile":   self._perfil_atual["Sec-CH-UA-Mobile"],
+                    "Sec-CH-UA-Platform": self._perfil_atual["Sec-CH-UA-Platform"],
+                })
 
-        tamanho_pool = max(self.workers + 5, 20)
-        adapter = requests_lib.adapters.HTTPAdapter(
-            pool_connections=tamanho_pool,
-            pool_maxsize=tamanho_pool,
-        )
-        self.session.mount("http://", adapter)
-        self.session.mount("https://", adapter)
+            tamanho_pool = max(self.workers + 5, 20)
+            adapter = requests_lib.adapters.HTTPAdapter(
+                pool_connections=tamanho_pool,
+                pool_maxsize=tamanho_pool,
+            )
+            self.session.mount("http://", adapter)
+            self.session.mount("https://", adapter)
+        else:
+            # Para curl_cffi, definimos headers diretamente
+            self.session.headers = {
+                "User-Agent":        self._perfil_atual["User-Agent"],
+                "Accept":            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Language":   "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Accept-Encoding":   "gzip, deflate, br",
+                "Connection":        "keep-alive",
+                "Upgrade-Insecure-Requests": "1",
+            }
+            if self._perfil_atual.get("Sec-CH-UA"):
+                self.session.headers.update({
+                    "Sec-CH-UA":          self._perfil_atual["Sec-CH-UA"],
+                    "Sec-CH-UA-Mobile":   self._perfil_atual["Sec-CH-UA-Mobile"],
+                    "Sec-CH-UA-Platform": self._perfil_atual["Sec-CH-UA-Platform"],
+                })
 
         if modo_captcha:
             sessao_cap = SessaoCaptcha(self.url_inicial)
@@ -505,7 +532,9 @@ class BaixadorOffline:
 
         versao = detectar_versao_chrome()
         try:
-            self._js_driver = uc.Chrome(options=options, headless=True, version_main=versao)
+            # undetected_chromedriver nao suporta o parametro headless=True explicitamente;
+            # o modo headless ja foi definido via options.add_argument(\"--headless=new\")
+            self._js_driver = uc.Chrome(options=options, version_main=versao)
             log.info("Chrome headless pronto.")
         except Exception as e:
             log.warning(f"Nao foi possivel iniciar Chrome headless: {e}")
@@ -820,7 +849,10 @@ class BaixadorOffline:
         for form in soup.find_all("form"):
             form["action"] = "#"
             form["onsubmit"] = "return false;"
-            form.pop("method", None)
+            try:
+                del form["method"]
+            except KeyError:
+                pass
 
         TAGS = [
             ("img",    ["src","data-src","data-lazy","data-lazy-src","data-original"]),
