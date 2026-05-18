@@ -167,7 +167,11 @@ def headers_navegador(perfil, url_pagina_atual=None, eh_asset=False):
     # Accept varia conforme tipo do recurso
     if eh_asset:
         hdrs["Accept"] = "*/*"
-        hdrs["Sec-Fetch-Dest"] = "script" if not eh_asset == "css" else "style"
+        # Se eh_asset for uma string (ex: "css"), usa isso; caso contrario (True), usa "script" como padrao
+        if isinstance(eh_asset, str) and eh_asset == "css":
+            hdrs["Sec-Fetch-Dest"] = "style"
+        else:
+            hdrs["Sec-Fetch-Dest"] = "script"
         hdrs["Sec-Fetch-Mode"] = "no-cors"
         hdrs["Sec-Fetch-Site"] = "same-origin"
     else:
@@ -505,7 +509,9 @@ class BaixadorOffline:
 
         versao = detectar_versao_chrome()
         try:
-            self._js_driver = uc.Chrome(options=options, headless=True, version_main=versao)
+            # undetected_chromedriver nao suporta o parametro headless=True explicitamente;
+            # o modo headless ja foi definido via options.add_argument(\"--headless=new\")
+            self._js_driver = uc.Chrome(options=options, version_main=versao)
             log.info("Chrome headless pronto.")
         except Exception as e:
             log.warning(f"Nao foi possivel iniciar Chrome headless: {e}")
